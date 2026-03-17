@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stock Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Sans', sans-serif; background: #f8f8f6; color: #2c2c2a; min-height: 100vh; padding: 2rem; }
+    .container { max-width: 960px; margin: 0 auto; }
+    .header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 2rem; }
+    .title { font-size: 22px; font-weight: 500; }
+    .subtitle { font-size: 13px; color: #888780; }
+    .last-updated { font-size: 12px; color: #888780; }
+    .search-bar { display: flex; gap: 8px; margin-bottom: 1.5rem; }
+    .search-bar input { flex: 1; font-family: 'DM Mono', monospace; font-size: 14px; padding: 8px 12px; border: 0.5px solid #d3d1c7; border-radius: 8px; background: #fff; color: #2c2c2a; outline: none; }
+    .search-bar input:focus { border-color: #185FA5; }
+    .search-bar button { font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 8px 16px; border: 0.5px solid #d3d1c7; border-radius: 8px; background: #fff; color: #2c2c2a; cursor: pointer; }
+    .search-bar button:hover { background: #f1efe8; }
+    .stock-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 1.5rem; }
+    .stock-card { background: #fff; border: 0.5px solid #d3d1c7; border-radius: 12px; padding: 1rem 1.25rem; cursor: pointer; transition: border-color 0.15s; position: relative; }
+    .stock-card:hover { border-color: #888780; }
+    .stock-card.active { border: 1.5px solid #185FA5; }
+    .stock-card .remove { position: absolute; top: 8px; right: 10px; font-size: 16px; color: #b4b2a9; cursor: pointer; line-height: 1; background: none; border: none; display: none; }
+    .stock-card:hover .remove { display: block; }
+    .stock-symbol { font-family: 'DM Mono', monospace; font-size: 13px; font-weight: 500; color: #888780; margin-bottom: 4px; }
+    .stock-price { font-size: 22px; font-weight: 500; color: #2c2c2a; margin-bottom: 4px; }
+    .stock-change { font-size: 13px; font-weight: 500; }
+    .stock-change.up { color: #3B6D11; }
+    .stock-change.down { color: #A32D2D; }
+    .stock-volume { font-size: 12px; color: #b4b2a9; margin-top: 4px; }
+    .stock-loading { font-size: 13px; color: #b4b2a9; padding: 8px 0; }
+    .chart-section { background: #fff; border: 0.5px solid #d3d1c7; border-radius: 12px; padding: 1.25rem; }
+    .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+    .chart-label { font-size: 14px; font-weight: 500; }
+    .chart-meta { font-size: 12px; color: #888780; }
+    .error-msg { font-size: 13px; color: #A32D2D; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <div class="title">Stock Dashboard</div>
+        <div class="subtitle">Live prices via Azure Functions</div>
+      </div>
+      <div class="last-updated" id="lastUpdated">--</div>
+    </div>
+
+    <div class="search-bar">
+      <input type="text" id="tickerInput" placeholder="Add ticker (e.g. GOOGL)" />
+      <button onclick="addStock()">+ Add stock</button>
+    </div>
+
+    <div class="stock-grid" id="stockGrid"></div>
+
+    <div class="chart-section">
+      <div class="chart-header">
+        <div class="chart-label" id="chartLabel">Select a stock to view history</div>
+        <div class="chart-meta">Daily close — last 10 trading days</div>
+      </div>
+      <div style="position: relative; width: 100%; height: 240px;">
+        <canvas id="priceChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <script>
+    const API_BASE = "https://stock-dashboard-func.azurewebsites.net/api/stocks";
+    const ALPHA_KEY_URL = `${API_BASE}/key`;
+    let stocks = ["AAPL", "TSLA", "NVDA", "MSFT"];
+    let activeSymbol = "AAPL";
+    let chart = null;
+    let alphaKey = null;
+
+    async function fetchApiKey() {
+      try {
+        const res = await fetch(`${API_BASE}/AAPL`);
+        const data = await res.json();
+        return data._key || null;
+      } catch { return null; }
+    }
+
+    async function fetchStock(symbol) {
+      const res = await fetch(`${API_BASE}/${symbol}`);
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    }
+
+    async function fetchHistory(symbol) {
+      const key = document.getElementById("alphaKey")?.value || "";
+      const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&outputsize=compact&apikey=${key}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      const series = data["Time Series (Daily)"];
+      if (!series) return null;
+      const dates = Object.keys(series).slice(0, 10).reverse();
+      const prices = dates.map(d => parseFloat(series[d]["4. close"]).toFixed(2));
+      return { dates, prices };
+    }
+
+    function renderCard(symbol, data, isLoading) {
+      const grid = document.getElementById("stockGrid");
+      let card = document.getElementById(`card-${symbol}`);
+      if (!card) {
+        card = document.createElement("div");
+        card.className = `stock-card${symbol === activeSymbol ? " active" : ""}`;
+        card.id = `card-${symbol}`;
+        card.onclick = () => selectStock(symbol);
+        card.innerHTML = `
+          <button class="remove" onclick="event.stopPropagation(); removeStock('${symbol}')">×</button>
+          <div class="stock-symbol">${symbol}</div>
+          <div class="stock-price" id="price-${symbol}">--</div>
+          <div class="stock-change" id="change-${symbol}">--</div>
+          <div class="stock-volume" id="volume-${symbol}">--</div>
+        `;
+        grid.appendChild(card);
+      }
+
+      if (isLoading) {
+        document.getElementById(`price-${symbol}`).textContent = "Loading...";
+        return;
+      }
+
+      if (data.error) {
+        document.getElementById(`price-${symbol}`).textContent = "Error";
+        document.getElementById(`change-${symbol}`).textContent = data.error;
+        document.getElementById(`change-${symbol}`).className = "stock-change down";
+        return;
+      }
+
+      const price = parseFloat(data.price).toFixed(2);
+      const change = parseFloat(data.change).toFixed(2);
+      const changePct = data.change_percent;
+      const volume = parseInt(data.volume).toLocaleString();
+      const isUp = change >= 0;
+
+      document.getElementById(`price-${symbol}`).textContent = `$${price}`;
+      document.getElementById(`change-${symbol}`).textContent = `${isUp ? "+" : ""}$${change} (${changePct})`;
+      document.getElementById(`change-${symbol}`).className = `stock-change ${isUp ? "up" : "down"}`;
+      document.getElementById(`volume-${symbol}`).textContent = `Vol: ${volume}`;
+    }
+
+    async function loadAllStocks() {
+      for (const symbol of stocks) {
+        renderCard(symbol, {}, true);
+        try {
+          const data = await fetchStock(symbol);
+          renderCard(symbol, data, false);
+        } catch {
+          renderCard(symbol, { error: "Failed to load" }, false);
+        }
+      }
+      document.getElementById("lastUpdated").textContent =
+        "Updated: " + new Date().toLocaleTimeString();
+    }
+
+    async function selectStock(symbol) {
+      activeSymbol = symbol;
+      document.querySelectorAll(".stock-card").forEach(c => c.classList.remove("active"));
+      document.getElementById(`card-${symbol}`)?.classList.add("active");
+      document.getElementById("chartLabel").textContent = `${symbol} — loading history...`;
+      await loadChart(symbol);
+    }
+
+    async function loadChart(symbol) {
+      try {
+        const res = await fetch(`${API_BASE}/${symbol}`);
+        const data = await res.json();
+        const key = data._key;
+
+        const histUrl = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&outputsize=compact&apikey=${key}`;
+        const histRes = await fetch(histUrl);
+        const histData = await histRes.json();
+        const series = histData["Time Series (Daily)"];
+
+        if (!series) {
+          document.getElementById("chartLabel").textContent = `${symbol} — history unavailable`;
+          return;
+        }
+
+        const dates = Object.keys(series).slice(0, 10).reverse();
+        const prices = dates.map(d => parseFloat(series[d]["4. close"]).toFixed(2));
+
+        document.getElementById("chartLabel").textContent = `${symbol} — price history`;
+        drawChart(dates, prices.map(Number), symbol);
+      } catch {
+        document.getElementById("chartLabel").textContent = `${symbol} — chart failed`;
+      }
+    }
+
+    function drawChart(labels, data, symbol) {
+      if (chart) chart.destroy();
+      chart = new Chart(document.getElementById("priceChart"), {
+        type: "line",
+        data: {
+          labels,
+          datasets: [{
+            label: symbol,
+            data,
+            borderColor: "#185FA5",
+            backgroundColor: "rgba(24,95,165,0.06)",
+            borderWidth: 1.5,
+            pointRadius: 3,
+            pointBackgroundColor: "#185FA5",
+            fill: true,
+            tension: 0.3
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { display: false }, ticks: { font: { size: 11 }, color: "#888780" } },
+            y: {
+              grid: { color: "rgba(136,135,128,0.15)" },
+              ticks: { font: { size: 11 }, color: "#888780", callback: v => "$" + v.toFixed(0) }
+            }
+          }
+        }
+      });
+    }
+
+    function addStock() {
+      const input = document.getElementById("tickerInput");
+      const symbol = input.value.trim().toUpperCase();
+      if (!symbol || stocks.includes(symbol)) return;
+      stocks.push(symbol);
+      input.value = "";
+      renderCard(symbol, {}, true);
+      fetchStock(symbol).then(data => renderCard(symbol, data, false))
+        .catch(() => renderCard(symbol, { error: "Not found" }, false));
+    }
+
+    function removeStock(symbol) {
+      stocks = stocks.filter(s => s !== symbol);
+      document.getElementById(`card-${symbol}`)?.remove();
+      if (activeSymbol === symbol && stocks.length > 0) selectStock(stocks[0]);
+    }
+
+    document.getElementById("tickerInput").addEventListener("keydown", e => {
+      if (e.key === "Enter") addStock();
+    });
+
+    loadAllStocks();
+    selectStock("AAPL");
+    setInterval(loadAllStocks, 60000);
+  </script>
+</body>
+</html>
