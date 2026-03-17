@@ -6,7 +6,7 @@ from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 
 def get_api_key():
-    vault_url = "https://stock-dashboard-kv.vault.azure.net/"
+    vault_url = "https://stock-dashboard-project.vault.azure.net/"
     credential = DefaultAzureCredential()
     client = SecretClient(vault_url=vault_url, credential=credential)
     return client.get_secret("AlphaVantageKey").value
