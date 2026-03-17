@@ -1,40 +1,41 @@
 import azure.functions as func
+import requests
 import json
-import os
+import logging
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+
+def get_api_key():
+    vault_url = "https://stock-dashboard-project.vault.azure.net/"
+    credential = DefaultAzureCredential()
+    client = SecretClient(vault_url=vault_url, credential=credential)
+    return client.get_secret("AlphaVantageKey").value
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    symbol = req.route_params.get("symbol", "AAPL").upper()
+    
     try:
-        # Step 1 - Test basic function works
-        symbol = req.route_params.get("symbol", "AAPL").upper()
-        
-        # Step 2 - Test Key Vault connection
-        from azure.identity import DefaultAzureCredential
-        from azure.keyvault.secrets import SecretClient
-        
-        vault_url = "https://stock-dashboard-project.vault.azure.net/"
-        credential = DefaultAzureCredential()
-        client = SecretClient(vault_url=vault_url, credential=credential)
-        secret = client.get_secret("AlphaVantageKey")
-        
-        # Step 3 - Test Alpha Vantage API
-        import requests
-        url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={secret.value}"
+        api_key = get_api_key()
+        url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={api_key}"
         response = requests.get(url)
         data = response.json()
         
-        return func.HttpResponse(
-            json.dumps({
-                "debug": "all steps passed",
-                "symbol": symbol,
-                "raw_response": data
-            }),
-            mimetype="application/json"
-        )
+        quote = data.get("Global Quote", {})
+        result = {
+            "symbol": symbol,
+            "price": quote.get("05. price", "N/A"),
+            "change": quote.get("09. change", "N/A"),
+            "change_percent": quote.get("10. change percent", "N/A"),
+            "volume": quote.get("06. volume", "N/A")
+        }
         
+        logging.info(f"Fetched stock data for {symbol}")
+        return func.HttpResponse(json.dumps(result), mimetype="application/json")
+    
     except Exception as e:
-        # Return the FULL error instead of empty response
+        logging.error(f"Error: {str(e)}")
         return func.HttpResponse(
-            json.dumps({"error": str(e), "type": type(e).__name__}),
+            json.dumps({"error": str(e)}),
             mimetype="application/json",
             status_code=500
         )
