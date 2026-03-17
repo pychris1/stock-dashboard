@@ -130,14 +130,13 @@
         document.getElementById(`change-${symbol}`).className = "stock-change down";
         return;
       }
-
-      const price = parseFloat(data.price).toFixed(2);
-      const change = parseFloat(data.change).toFixed(2);
+      const price = isNaN(parseFloat(data.price)) ? "N/A" : parseFloat(data.price).toFixed(2);
+      const change = isNaN(parseFloat(data.change)) ? "0.00" : parseFloat(data.change).toFixed(2);
       const changePct = data.change_percent;
       const volume = parseInt(data.volume).toLocaleString();
       const isUp = change >= 0;
 
-      document.getElementById(`price-${symbol}`).textContent = `$${price}`;
+      document.getElementById(`price-${symbol}`).textContent = price === "N/A" ? "N/A" : `$${price}`;
       document.getElementById(`change-${symbol}`).textContent = `${isUp ? "+" : ""}$${change} (${changePct})`;
       document.getElementById(`change-${symbol}`).className = `stock-change ${isUp ? "up" : "down"}`;
       document.getElementById(`volume-${symbol}`).textContent = `Vol: ${volume}`;
